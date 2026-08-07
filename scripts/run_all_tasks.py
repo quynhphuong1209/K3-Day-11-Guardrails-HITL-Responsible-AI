@@ -1,9 +1,14 @@
 import sys
 import asyncio
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from .env
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(PROJECT_ROOT / ".env")
 
 # Add src to python path
-SRC_DIR = Path(__file__).resolve().parents[1] / "src"
+SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
 from assignment.pipeline import build_production_plugins, build_observability, run_assignment_suite
@@ -14,7 +19,7 @@ from guardrails.output_guardrails import test_content_filter, _init_judge
 
 async def main():
     print("=== RUNNING ASSIGNMENT 11 TASKS ===")
-    student_id = "SE123456"
+    student_id = "2A202601865"
 
     # Part 2: Guardrails
     test_injection_detection()

@@ -1,7 +1,8 @@
 # Day 11 — Controlled Agent Security (2026)
 
-Làm sao để ứng dụng agent an toàn hơn?
-
+**Họ tên:** Đinh Lê Quỳnh Phương  
+**MSSV:** 2A202601865  
+**Khóa:** Khóa 3 — AI Agent Development  
 **Hình thức:** bài tập **cá nhân** (1 người / 1 MSSV).
 
 **Đề bài duy nhất:** [`assignment11.md`](assignment11.md) · Cách nộp: [`SUBMISSION.md`](SUBMISSION.md)
