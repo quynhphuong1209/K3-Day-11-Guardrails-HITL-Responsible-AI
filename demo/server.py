@@ -194,7 +194,7 @@ def chat():
     if contains_blocked_topic(user_message):
         return jsonify({
             "conversation_id": conversation_id,
-            "response": "Yêu cầu bị chặn vì chứa nội dung không an toàn.",
+            "response": "Yêu cầu bị chặn vì chứa nội dung nguy hiểm.",
             "blocked": True,
             "block_reason": "unsafe_topic",
             "context_status": "not_used",
