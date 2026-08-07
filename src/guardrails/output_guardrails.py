@@ -15,6 +15,10 @@ from google.adk.plugins import base_plugin
 from core.utils import chat_with_agent
 
 
+# Import GuardrailState from input_guardrails
+from guardrails.input_guardrails import GuardrailState
+
+
 # ============================================================
 # TODO 4: Implement content_filter()
 #
@@ -139,8 +143,9 @@ async def llm_safety_check(response_text: str) -> dict:
 class OutputGuardrailPlugin(base_plugin.BasePlugin):
     """Plugin that checks agent output before sending to user."""
 
-    def __init__(self, use_llm_judge=True):
+    def __init__(self, shared_state: GuardrailState, use_llm_judge=True):
         super().__init__(name="output_guardrail")
+        self.state = shared_state
         self.use_llm_judge = use_llm_judge and (safety_judge_agent is not None)
         self.blocked_count = 0
         self.redacted_count = 0
@@ -162,6 +167,20 @@ class OutputGuardrailPlugin(base_plugin.BasePlugin):
         llm_response,
     ):
         """Check LLM response before sending to user."""
+        # If input plugin blocked, replace response with block message
+        if self.state.last_blocked:
+            self.blocked_count += 1
+            if self.state.block_reason == "injection":
+                block_msg = "Yêu cầu bị chặn: phát hiện prompt injection. Tôi chỉ có thể trả lời các câu hỏi ngân hàng chuẩn của VinBank."
+            else:
+                block_msg = "Yêu cầu bị chặn: câu hỏi ngoài chủ đề. Tôi chỉ có thể hỗ trợ các dịch vụ ngân hàng của VinBank."
+
+            llm_response.content = types.Content(
+                role="model",
+                parts=[types.Part.from_text(text=block_msg)]
+            )
+            return llm_response
+
         self.total_count += 1
 
         response_text = self._extract_text(llm_response)
@@ -185,7 +204,7 @@ class OutputGuardrailPlugin(base_plugin.BasePlugin):
                 self.blocked_count += 1
                 llm_response.content = types.Content(
                     role="model",
-                    parts=[types.Part.from_text(text="I cannot share internal system details or unsafe content.")],
+                    parts=[types.Part.from_text(text="Tôi không thể chia sẻ thông tin hệ thống nội bộ hoặc nội dung không an toàn.")],
                 )
 
         return llm_response

@@ -15,6 +15,17 @@ from core.config import ALLOWED_TOPICS, BLOCKED_TOPICS
 
 
 # ============================================================
+# Shared state between Input and Output plugins
+# ============================================================
+
+class GuardrailState:
+    """Shared state between input and output plugins"""
+    def __init__(self):
+        self.last_blocked = False
+        self.block_reason = ""
+
+
+# ============================================================
 # TODO 1: Implement detect_injection()
 #
 # Canonicalize Unicode/invisible spacing, then detect prompt injection.
@@ -36,11 +47,19 @@ from core.config import ALLOWED_TOPICS, BLOCKED_TOPICS
 def normalize_text(text: str) -> str:
     """Normalize unicode and remove invisible characters."""
     text = unicodedata.normalize("NFKC", text)
-    # Remove zero-width characters and invisible spaces
     invisible_chars = ["\u200b", "\u200c", "\u200d", "\ufeff", "\u200e", "\u200f", "\u00ad"]
     for char in invisible_chars:
         text = text.replace(char, "")
     return text
+
+
+def normalize_for_topic_matching(text: str) -> str:
+    """Normalize Vietnamese text to the unaccented topic vocabulary."""
+    text = normalize_text(text).lower().replace("\u0111", "d")
+    return "".join(
+        char for char in unicodedata.normalize("NFD", text)
+        if unicodedata.category(char) != "Mn"
+    )
 
 
 def detect_injection(user_input: str) -> bool:
@@ -79,36 +98,31 @@ def detect_injection(user_input: str) -> bool:
 # ============================================================
 # TODO 2: Implement topic_filter()
 #
-# Check if user_input belongs to allowed topics.
-# The VinBank agent should only answer about: banking, account,
-# transaction, loan, interest rate, savings, credit card.
-#
-# Return True if input should be BLOCKED (off-topic or blocked topic).
+# Return True for off-topic or explicitly dangerous input.
 # ============================================================
 
+def contains_blocked_topic(user_input: str) -> bool:
+    """Return True when input contains an explicitly dangerous topic."""
+    normalized_input = normalize_for_topic_matching(user_input)
+    return any(
+        re.search(
+            r"\b" + re.escape(normalize_for_topic_matching(blocked)) + r"\b",
+            normalized_input,
+        )
+        for blocked in BLOCKED_TOPICS
+    )
+
+
 def topic_filter(user_input: str) -> bool:
-    """Check if input is off-topic or contains blocked topics.
+    """Return True for dangerous or non-banking topics."""
+    if contains_blocked_topic(user_input):
+        return True
 
-    Args:
-        user_input: The user's message
-
-    Returns:
-        True if input should be BLOCKED (off-topic or blocked topic)
-    """
-    input_lower = user_input.lower()
-
-    # 1. If input contains any blocked topic -> return True (blocked)
-    for blocked in BLOCKED_TOPICS:
-        if re.search(r"\b" + re.escape(blocked) + r"\b", input_lower):
-            return True
-
-    # 2. If input contains any allowed banking topic -> return False (allowed)
-    for allowed in ALLOWED_TOPICS:
-        if allowed in input_lower:
-            return False
-
-    # 3. Otherwise -> return True (off-topic / blocked)
-    return True
+    normalized_input = normalize_for_topic_matching(user_input)
+    return not any(
+        normalize_for_topic_matching(allowed) in normalized_input
+        for allowed in ALLOWED_TOPICS
+    )
 
 
 # ============================================================
@@ -125,10 +139,12 @@ def topic_filter(user_input: str) -> bool:
 class InputGuardrailPlugin(base_plugin.BasePlugin):
     """Plugin that blocks bad input before it reaches the LLM."""
 
-    def __init__(self):
+    def __init__(self, shared_state: GuardrailState, allow_off_topic: bool = False):
         super().__init__(name="input_guardrail")
         self.blocked_count = 0
         self.total_count = 0
+        self.state = shared_state
+        self.allow_off_topic = allow_off_topic
 
     def _extract_text(self, content: types.Content) -> str:
         """Extract plain text from a Content object."""
@@ -159,18 +175,29 @@ class InputGuardrailPlugin(base_plugin.BasePlugin):
             types.Content if message is blocked (return replacement)
         """
         self.total_count += 1
+        self.state.last_blocked = False
+        self.state.block_reason = ""
         text = self._extract_text(user_message)
 
         if detect_injection(text):
             self.blocked_count += 1
-            return self._block_response(
-                "Request blocked: prompt injection detected. I can only answer standard VinBank banking queries."
+            self.state.last_blocked = True
+            self.state.block_reason = "injection"
+            return types.Content(
+                role="user",
+                parts=[types.Part.from_text(text="dummy")]
             )
 
-        if topic_filter(text):
+        should_block_topic = contains_blocked_topic(text) or (
+            not self.allow_off_topic and topic_filter(text)
+        )
+        if should_block_topic:
             self.blocked_count += 1
-            return self._block_response(
-                "Request blocked: off-topic question. I can only assist with VinBank banking services."
+            self.state.last_blocked = True
+            self.state.block_reason = "unsafe_topic"
+            return types.Content(
+                role="user",
+                parts=[types.Part.from_text(text="dummy")]
             )
 
         return None

@@ -170,11 +170,19 @@ def check_secret_leak(response: str) -> bool:
     return False
 
 
-class GuardsInputPlugin(base_plugin.BasePlugin):
+class GuardsState:
+    """Shared state between input and output plugins"""
     def __init__(self):
+        self.last_blocked = False
+        self.block_reason = ""
+
+
+class GuardsInputPlugin(base_plugin.BasePlugin):
+    def __init__(self, shared_state: GuardsState):
         super().__init__(name="guards_input")
         self.blocked_count = 0
         self.total_count = 0
+        self.state = shared_state
 
     def _text(self, content: types.Content) -> str:
         if not content or not content.parts:
@@ -188,26 +196,37 @@ class GuardsInputPlugin(base_plugin.BasePlugin):
         self, *, invocation_context: InvocationContext, user_message: types.Content
     ) -> types.Content | None:
         self.total_count += 1
+        self.state.last_blocked = False
+        self.state.block_reason = ""
         text = self._text(user_message)
+
         if detect_injection_strong(text):
             self.blocked_count += 1
-            return self._block(
-                "I cannot process that request. I only help with VinBank banking questions."
+            self.state.last_blocked = True
+            self.state.block_reason = "injection"
+            # Don't pass to agent - return dummy message
+            return types.Content(
+                role="user",
+                parts=[types.Part.from_text(text="dummy")]
             )
         if topic_filter_strong(text):
             self.blocked_count += 1
-            return self._block(
-                "I'm a VinBank assistant and can only help with banking-related questions."
+            self.state.last_blocked = True
+            self.state.block_reason = "offtopic"
+            return types.Content(
+                role="user",
+                parts=[types.Part.from_text(text="dummy")]
             )
         return None
 
 
 class GuardsOutputPlugin(base_plugin.BasePlugin):
-    def __init__(self):
+    def __init__(self, shared_state: GuardsState):
         super().__init__(name="guards_output")
         self.redacted_count = 0
         self.blocked_count = 0
         self.total_count = 0
+        self.state = shared_state
 
     def _text(self, llm_response) -> str:
         if not hasattr(llm_response, "content") or not llm_response.content:
@@ -217,6 +236,21 @@ class GuardsOutputPlugin(base_plugin.BasePlugin):
         )
 
     async def after_model_callback(self, *, callback_context, llm_response):
+        # If input plugin blocked, replace response with block message
+        if self.state.last_blocked:
+            self.blocked_count += 1
+            if self.state.block_reason == "injection":
+                block_msg = "I cannot process that request. I only help with VinBank banking questions."
+            else:
+                block_msg = "I'm a VinBank assistant and can only help with banking-related questions."
+
+            # Modify existing response content
+            llm_response.content = types.Content(
+                role="model",
+                parts=[types.Part.from_text(text=block_msg)]
+            )
+            return llm_response
+
         self.total_count += 1
         text = self._text(llm_response)
         if not text:
@@ -239,7 +273,8 @@ class GuardsOutputPlugin(base_plugin.BasePlugin):
 
 def create_guards_agent():
     """Create VinBank agent with strong input + output guardrails (bonus target)."""
-    plugins = [GuardsInputPlugin(), GuardsOutputPlugin()]
+    state = GuardsState()
+    plugins = [GuardsInputPlugin(state), GuardsOutputPlugin(state)]
     agent = llm_agent.LlmAgent(
         model="gemini-3.1-flash-lite",
         name="guards_assistant",
